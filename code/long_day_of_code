@@ -1,0 +1,206 @@
+select cod_sscc, date_dt, sum(personas_distintas) 
+from tf
+group by cod_sscc, date_dt
+limit 100
+
+
+select cod_sscc, date_dt, sum(personas_distintas) 
+from tf_censo
+group by cod_sscc, date_dt
+limit 50
+
+select *, 
+population *1.5 as baseline_waste,
+personas_distintas * .1 as tourst_waste_lite,
+personas_distintas * .2 as tourst_waste_mid,
+personas_distintas * .3 as tourst_waste_heavy,
+(population *1.5) + (personas_distintas * .1) as total_waste_lite,
+(population *1.5) + (personas_distintas * .2) as total_waste_mid,
+(population *1.5) + (personas_distintas * .3) as total_waste_heavy
+from tf_censo limit 5
+
+drop table tf_censo_bins;
+create table tf_censo_bins as
+select t.*, 
+population *1.5 as baseline_waste,
+personas_distintas * .1 as tourst_waste_lite,
+personas_distintas * .2 as tourst_waste_mid,
+personas_distintas * .3 as tourst_waste_heavy,
+(population *1.5) + (personas_distintas * .1) as total_waste_lite,
+(population *1.5) + (personas_distintas * .2) as total_waste_mid,
+(population *1.5) + (personas_distintas * .3) as total_waste_heavy,
+s.geom
+from tf_censo t
+left join sscc s
+on s.seccode = t.cod_sscc;
+
+
+
+select cod_sscc, date_dt,geom, 
+min(personas_distintas) as tourists, 
+min(population) as pop,
+min(baseline_waste) as base_waste,
+min(tourst_waste_lite) as tourist_waste_lite,
+min(tourst_waste_mid) as tourist_waste_mid,
+min(tourst_waste_heavy) as tourist_waste_heavy
+from tf_censo_bins
+group by cod_sscc, date_dt,geom
+
+create table waste_sscc_day as
+select cod_sscc, date_dt,geom, 
+sum(personas_distintas) as tourists, 
+min(population) as pop,
+min(baseline_waste) as base_waste,
+sum(tourst_waste_lite) as tourist_waste_lite,
+sum(tourst_waste_mid) as tourist_waste_mid,
+sum(tourst_waste_heavy) as tourist_waste_heavy
+from tf_censo_bins
+group by cod_sscc, date_dt,geom
+
+select cod_sscc,date_dt,geom,
+sum(tourist_waste_heavy) as tourists, 
+sum(base_waste) as locals,
+sum(tourist_waste_heavy) + sum(base_waste) as total_waste,
+extract(dow from date_dt::timestamp)
+from waste_sscc_day
+where date_dt = '2014-08-03'
+group by cod_sscc,date_dt,geom
+order by cod_sscc
+
+
+select b.*, w.base_waste,w.tourist_waste_lite
+from alicante_bins as b, waste_sscc_day as w
+where st_within(b.geom, w.geom) and w.date_dt = '2014-08-01' 
+
+select uid as source_id,st_x(st_centroid(geom)), st_y(st_centroid(geom)) as y from alicante_bins
+
+SELECT seq, id1, id2, round(cost::numeric, 2) AS cost 
+FROM pgr_tsp('select uid as id,st_x(st_centroid(geom)) as x, st_y(st_centroid(geom)) as y from alicante_bins', 55, 265);
+
+create table route1 as
+select b.uid as id,st_x(st_centroid(b.geom)) as x, st_y(st_centroid(b.geom)) as y,
+w.base_waste,w.tourist_waste_lite,
+w.base_waste + w.tourist_waste_lite as total_waste,
+b.source
+from alicante_bins_ways as b
+left join waste_sscc_day as w
+on st_within(b.geom,w.geom)
+where  w.date_dt = '2014-08-01' and w.base_waste + w.tourist_waste_lite > 2000
+order by uid
+
+
+SELECT seq, id1, id2, COST AS cost 
+FROM pgr_tsp('select uid as id,st_x(st_centroid(geom)) as x, st_y(st_centroid(geom)) as y from alicante_bins order by uid', 55);
+
+
+
+SELECT seq, id1, id2, COST AS cost 
+FROM pgr_tsp('select * from route1 order by id', 123);
+
+
+
+SELECT seq, id1, id2, COST AS cost 
+FROM pgr_tsp('select * from route1 order by id', 123);
+
+
+
+SELECT seq, id1 AS node, id2 AS edge, cost,the_geom FROM pgr_astar('
+  SELECT gid AS id,
+  source::integer,
+  target::integer,
+  length::double precision AS cost,
+  x1, y1, x2, y2
+  FROM ways',
+  50, 1000, true, false) as di
+  JOIN ways pt
+  ON di.id2 = pt.gid ;
+
+
+
+########################################################
+# The Process
+
+
+
+## Generate the bins to visit
+
+drop table day1;
+create table day1 as
+select b.uid as id,st_x(st_centroid(b.geom)) as x, st_y(st_centroid(b.geom)) as y,
+w.base_waste,w.tourist_waste_lite,
+w.base_waste + w.tourist_waste_lite as total_waste,
+b.source,
+b.geom
+from (select distinct(uid), geom, id, prob_l,prob_m,prob_h, capacity, source from alicante_bins_ways) as b
+left join waste_sscc_day as w
+on st_within(b.geom,w.geom)
+where  w.date_dt = '2014-08-01' and w.base_waste + w.tourist_waste_lite > 2000
+order by uid
+
+drop table day2;
+create table day2 as
+select b.uid as id,st_x(st_centroid(b.geom)) as x, st_y(st_centroid(b.geom)) as y,
+w.base_waste,w.tourist_waste_lite,
+w.base_waste + w.tourist_waste_lite as total_waste,
+b.source,
+b.geom
+from (select distinct(uid), geom, id, prob_l,prob_m,prob_h, capacity, source from alicante_bins_ways) as b
+left join waste_sscc_day as w
+on st_within(b.geom,w.geom)
+where  w.date_dt = '2014-08-02' and w.base_waste + w.tourist_waste_lite < 2000
+order by uid
+
+
+drop table all_bins;
+create table all_bins as
+select b.uid as id,st_x(st_centroid(b.geom)) as x, st_y(st_centroid(b.geom)) as y,
+w.base_waste,w.tourist_waste_lite,
+w.base_waste + w.tourist_waste_lite as total_waste,
+b.source,
+b.geom
+from (select distinct(uid), geom, id, prob_l,prob_m,prob_h, capacity, source from alicante_bins_ways) as b
+order by uid
+
+
+## Identify the best route (TSP)
+
+SELECT seq, id1, id2, COST AS cost, d.source
+FROM pgr_tsp('select * from day1 order by id', 123) as r
+left join day1 as d 
+on r.id2 = d.id;
+
+## Route
+
+
+drop table all_bins_10p;
+create table all_bins_10p as
+select b.uid as id,st_x(st_centroid(b.geom)) as x, st_y(st_centroid(b.geom)) as y,
+b.source,
+b.geom
+from (select distinct(uid), geom, id, prob_l,prob_m,prob_h, capacity, source from alicante_bins_ways limit 252) as b
+order by uid
+
+create table opt_route_all_10p as
+select * from opt_route;
+truncate opt_route_all_10p
+
+select sum(st_length(the_geom)),sum(ST_Length(the_geom::geography))/1000 from opt_route_all
+select sum(st_length(the_geom)),sum(ST_Length(the_geom::geography))/1000 from opt_route_all_5p
+select sum(st_length(the_geom)),sum(ST_Length(the_geom::geography))/1000 from opt_route_all_10p
+
+select sum(st_length(the_geom)),sum(ST_Length(the_geom::geography))/1000 from opt_route
+select sum(st_length(the_geom)),sum(ST_Length(the_geom::geography))/1000 from opt_route2
+
+
+
+
+SELECT ST_AsText(ST_Transform(the_geom,26915)) from opt_route_all;
+
+select * from opt_route_all
+order by source
+
+
+
+
+
+
